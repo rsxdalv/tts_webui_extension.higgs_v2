@@ -5,11 +5,11 @@ def extension__tts_generation_webui():
     ui_wrapper()
     return {
         "package_name": "extension_higgs_v2",
-        "name": "Higgs_v2",
+        "name": "Higgs V2 (Early Access)",
         "requirements": "git+https://github.com/rsxdalv/extension_higgs_v2@main",
-        "description": "Higgs_v2, Boson AI's first production-grade open source TTS model",
+        "description": "Higgs V2, Boson AI's TTS model",
         "extension_type": "interface",
-        "extension_class": "tools",
+        "extension_class": "text-to-speech",
         "author": "Boson AI",
         "extension_author": "rsxdalv",
         "license": "MIT",

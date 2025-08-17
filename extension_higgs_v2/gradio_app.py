@@ -2,27 +2,18 @@ import functools
 import os
 import tempfile
 import gradio as gr
-from gradio_iconbutton import IconButton
 
 from tts_webui.decorators import *
-from tts_webui.decorators.decorator_save_wav import (
-    decorator_save_wav_generator_accumulated,
-)
 from tts_webui.extensions_loader.decorator_extensions import (
     decorator_extension_inner,
     decorator_extension_outer,
-    decorator_extension_inner_generator,
-    decorator_extension_outer_generator,
 )
 
 from .api import (
     tts,
-    tts_stream,
-    vc,
     get_engine,
     get_whisper_model,
 )
-from .memory import get_higgs_v2_memory_usage
 
 
 @functools.wraps(tts)
@@ -40,53 +31,8 @@ def tts_decorated(*args, _type=None, **kwargs):
     return tts(*args, **kwargs)
 
 
-@functools.wraps(tts_stream)
-# @decorator_convert_audio_output_generator  # <-- This goes first/top
-@decorator_extension_outer_generator
-@decorator_apply_torch_seed_generator
-@decorator_save_metadata_generator
-@decorator_save_wav_generator_accumulated
-@decorator_add_model_type_generator("higgs_v2")
-@decorator_add_base_filename_generator_accumulated
-@decorator_add_date_generator
-@decorator_log_generation_generator
-@decorator_extension_inner_generator
-@log_generator_time
-def tts_generator_decorated(*args, **kwargs):
-    yield from tts_stream(*args, **kwargs)
-
-
 def ui():
-    gr.HTML(
-        """
-  <h2 style="text-align: center;">Higgs_v2 TTS</h2>
-
-  <div style="display: flex; flex-wrap: wrap; gap: 20px;">
-    <div style="flex: 1; min-width: 300px;">
-      <h2>Model sizes:</h2>
-      <ul style="list-style-type: disc; padding-left: 20px; margin-top: 0;">
-        <li><strong>t3_cfg.safetensors</strong> 2.13 GB</li>
-        <li><strong>s3gen.safetensors</strong> 1.06 GB</li>
-      </ul>
-    </div>
-
-    <div style="flex: 1; min-width: 300px;">
-      <h2>Performance on NVIDIA RTX 3090</h2>
-      <ul style="list-style-type: disc; padding-left: 20px;">
-        <li><strong>VRAM</strong>: Float32: 5-7 GB, Bfloat16: 3-4 GB, CPU Offloading Passive: 0.7 GB of VRAM</li>
-        <li><strong>Speed</strong>: ~32.04 iterations per second, 1:1 ratio</li>
-      </ul>
-    </div>
-  </div>
-                """
-    )
-    with gr.Tabs():
-        with gr.Tab("TTS"):
-            with gr.Row():
-                higgs_v2_tts()
-        with gr.Tab("Voice Conversion"):
-            with gr.Row():
-                higgs_v2_vc()
+    higgs_v2_tts()
 
 
 def higgs_v2_tts():
@@ -94,7 +40,11 @@ def higgs_v2_tts():
     # Voice prompts directory (optional); if not found, preloaded_voices stays empty
     voice_prompts_dir = os.path.join(os.getcwd(), "examples", "voice_prompts")
     preloaded_voices = (
-        [os.path.splitext(f)[0] for f in os.listdir(voice_prompts_dir) if f.lower().endswith(".wav")]
+        [
+            os.path.splitext(f)[0]
+            for f in os.listdir(voice_prompts_dir)
+            if f.lower().endswith(".wav")
+        ]
         if os.path.exists(voice_prompts_dir)
         else []
     )
@@ -119,14 +69,18 @@ def higgs_v2_tts():
         # Validation for multi-speaker
         is_multi_speaker = "[SPEAKER" in (transcript or "")
         if is_multi_speaker and voice_type == "Voice Clone":
-            return gr.update(value=None), "For multi-speaker transcripts, please use 'Smart Voice' or 'Multi-voice Clone'."
+            return (
+                gr.update(value=None),
+                "For multi-speaker transcripts, please use 'Smart Voice' or 'Multi-voice Clone'.",
+            )
         if not is_multi_speaker and voice_type == "Multi-voice Clone":
-            return gr.update(value=None), "For 'Multi-voice Clone', your transcript must include speaker tags like [SPEAKER0] and [SPEAKER1]."
+            return (
+                gr.update(value=None),
+                "For 'Multi-voice Clone', your transcript must include speaker tags like [SPEAKER0] and [SPEAKER1].",
+            )
 
         # System prompt and messages
-        system_prompt = (
-            f"Generate audio following instruction.\n\n<|scene_desc_start|>\n{scene_description}\n<|scene_desc_end|>"
-        )
+        system_prompt = f"Generate audio following instruction.\n\n<|scene_desc_start|>\n{scene_description}\n<|scene_desc_end|>"
         messages = [Message(role="system", content=system_prompt)]
         ras_win_len = 7
 
@@ -145,10 +99,15 @@ def higgs_v2_tts():
             # Single reference
             if ref_audio_dropdown == "Custom Upload":
                 if custom_audio_upload is None:
-                    return gr.update(value=None), "Please upload a custom audio file (WAV format)."
+                    return (
+                        gr.update(value=None),
+                        "Please upload a custom audio file (WAV format).",
+                    )
                 ref_audio_path = custom_audio_upload
                 whisper_model = get_whisper_model(
-                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                    model_name="whisper-base",
+                    device=torch.device(device),
+                    dtype=torch.float32,
                 )
                 result = whisper_model.transcribe(ref_audio_path)
                 ref_transcript = result.get("text", "")
@@ -156,72 +115,114 @@ def higgs_v2_tts():
                 ref_audio_path = None
                 ref_transcript = None
             else:
-                ref_audio_path = os.path.join(voice_prompts_dir, f"{ref_audio_dropdown}.wav")
-                ref_transcript_path = os.path.join(voice_prompts_dir, f"{ref_audio_dropdown}.txt")
+                ref_audio_path = os.path.join(
+                    voice_prompts_dir, f"{ref_audio_dropdown}.wav"
+                )
+                ref_transcript_path = os.path.join(
+                    voice_prompts_dir, f"{ref_audio_dropdown}.txt"
+                )
                 if not os.path.exists(ref_transcript_path):
-                    return gr.update(value=None), f"Reference transcript not found at {ref_transcript_path}"
+                    return (
+                        gr.update(value=None),
+                        f"Reference transcript not found at {ref_transcript_path}",
+                    )
                 with open(ref_transcript_path, encoding="utf-8") as f:
                     ref_transcript = f.read().strip()
 
             if ref_audio_path and ref_transcript is not None:
                 messages.append(Message(role="user", content=ref_transcript))
                 messages.append(
-                    Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path)])
+                    Message(
+                        role="assistant",
+                        content=[AudioContent(audio_url=ref_audio_path)],
+                    )
                 )
             messages.append(Message(role="user", content=transcript))
 
         elif voice_type == "Multi-voice Clone":
             if speaker0 == "None" or speaker1 == "None":
-                return gr.update(value=None), "Please select two speakers for multi-voice cloning."
+                return (
+                    gr.update(value=None),
+                    "Please select two speakers for multi-voice cloning.",
+                )
 
             # Speaker 0
             if speaker0 == "Custom Upload":
                 if speaker0_custom_audio_upload is None:
-                    return gr.update(value=None), "Please upload a custom audio file for Speaker 0 (WAV format)."
+                    return (
+                        gr.update(value=None),
+                        "Please upload a custom audio file for Speaker 0 (WAV format).",
+                    )
                 ref_audio_path_0 = speaker0_custom_audio_upload
                 whisper_model = get_whisper_model(
-                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                    model_name="whisper-base",
+                    device=torch.device(device),
+                    dtype=torch.float32,
                 )
                 result = whisper_model.transcribe(ref_audio_path_0)
                 ref_transcript_0 = result.get("text", "")
             else:
                 ref_audio_path_0 = os.path.join(voice_prompts_dir, f"{speaker0}.wav")
-                ref_transcript_path_0 = os.path.join(voice_prompts_dir, f"{speaker0}.txt")
+                ref_transcript_path_0 = os.path.join(
+                    voice_prompts_dir, f"{speaker0}.txt"
+                )
                 if not os.path.exists(ref_transcript_path_0):
-                    return gr.update(value=None), f"Reference transcript not found for {speaker0}"
+                    return (
+                        gr.update(value=None),
+                        f"Reference transcript not found for {speaker0}",
+                    )
                 with open(ref_transcript_path_0, encoding="utf-8") as f:
                     ref_transcript_0 = f.read().strip()
 
             # Speaker 1
             if speaker1 == "Custom Upload":
                 if speaker1_custom_audio_upload is None:
-                    return gr.update(value=None), "Please upload a custom audio file for Speaker 1 (WAV format)."
+                    return (
+                        gr.update(value=None),
+                        "Please upload a custom audio file for Speaker 1 (WAV format).",
+                    )
                 ref_audio_path_1 = speaker1_custom_audio_upload
                 whisper_model = get_whisper_model(
-                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                    model_name="whisper-base",
+                    device=torch.device(device),
+                    dtype=torch.float32,
                 )
                 result = whisper_model.transcribe(ref_audio_path_1)
                 ref_transcript_1 = result.get("text", "")
             else:
                 ref_audio_path_1 = os.path.join(voice_prompts_dir, f"{speaker1}.wav")
-                ref_transcript_path_1 = os.path.join(voice_prompts_dir, f"{speaker1}.txt")
+                ref_transcript_path_1 = os.path.join(
+                    voice_prompts_dir, f"{speaker1}.txt"
+                )
                 if not os.path.exists(ref_transcript_path_1):
-                    return gr.update(value=None), f"Reference transcript not found for {speaker1}"
+                    return (
+                        gr.update(value=None),
+                        f"Reference transcript not found for {speaker1}",
+                    )
                 with open(ref_transcript_path_1, encoding="utf-8") as f:
                     ref_transcript_1 = f.read().strip()
 
-            messages.extend([
-                Message(role="user", content=f"[SPEAKER0] {ref_transcript_0}"),
-                Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path_0)]),
-                Message(role="user", content=f"[SPEAKER1] {ref_transcript_1}"),
-                Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path_1)]),
-                Message(role="user", content=transcript),
-            ])
+            messages.extend(
+                [
+                    Message(role="user", content=f"[SPEAKER0] {ref_transcript_0}"),
+                    Message(
+                        role="assistant",
+                        content=[AudioContent(audio_url=ref_audio_path_0)],
+                    ),
+                    Message(role="user", content=f"[SPEAKER1] {ref_transcript_1}"),
+                    Message(
+                        role="assistant",
+                        content=[AudioContent(audio_url=ref_audio_path_1)],
+                    ),
+                    Message(role="user", content=transcript),
+                ]
+            )
 
         # Seed
         if seed is not None and str(seed).strip() != "":
             try:
                 import torch as _t
+
                 _t.manual_seed(int(seed))
             except Exception:
                 pass
@@ -241,13 +242,18 @@ def higgs_v2_tts():
         )
 
         audio_data = (
-            output.audio.detach().cpu().numpy() if hasattr(output, "audio") and getattr(output, "audio") is not None and hasattr(output.audio, "detach") else output.audio
+            output.audio.detach().cpu().numpy()
+            if hasattr(output, "audio")
+            and getattr(output, "audio") is not None
+            and hasattr(output.audio, "detach")
+            else output.audio
         )
         tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
         sf.write(tmp_file.name, audio_data, output.sampling_rate)
 
         try:
             import torch as _t
+
             if _t.cuda.is_available():
                 _t.cuda.empty_cache()
         except Exception:
@@ -385,43 +391,6 @@ def higgs_v2_tts():
         ],
         outputs=[output_audio, error_md],
     )
-
-
-@functools.wraps(vc)
-@decorator_extension_outer
-@decorator_apply_torch_seed
-@decorator_save_metadata
-@decorator_save_wav
-@decorator_add_model_type("higgs_v2-vc")
-@decorator_add_base_filename
-@decorator_add_date
-@decorator_log_generation
-@decorator_extension_inner
-@log_function_time
-def vc_decorated(*args, **kwargs):
-    return vc(*args, **kwargs)
-
-
-def higgs_v2_vc():
-    with gr.Column():
-        audio_in = gr.Audio(label="Input Audio", type="filepath", value=None)
-        btn = gr.Button("Convert", variant="primary")
-        audio_ref = gr.Audio(label="Audio Reference", type="filepath", value=None)
-    with gr.Column():
-        audio_out = gr.Audio(label="Output Audio")
-
-    btn.click(fn=lambda: gr.Button("Converting..."), outputs=[btn]).then(
-        **dictionarize_wraps(
-            vc_decorated,
-            inputs={audio_in: "audio_in", audio_ref: "audio_ref"},
-            outputs={
-                "audio_out": audio_out,
-                "metadata": gr.JSON(visible=False),
-                "folder_root": gr.Textbox(visible=False),
-            },
-            api_name="higgs_v2_vc",
-        )
-    ).then(fn=lambda: gr.Button("Convert"), outputs=[btn])
 
 
 if __name__ == "__main__":
