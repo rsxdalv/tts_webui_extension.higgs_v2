@@ -85,11 +85,7 @@ def higgs_v2_tts():
         ras_win_len = 7
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        engine = get_engine(
-            model_name=f"HiggsAudioEngine on {device} with float32",
-            device=torch.device(device),
-            dtype=torch.float32,
-        )
+        engine = get_engine(model_name=f"HiggsAudioEngine on {device} with float32")
 
         # Voice handling
         if voice_type == "Smart Voice":
@@ -104,11 +100,7 @@ def higgs_v2_tts():
                         "Please upload a custom audio file (WAV format).",
                     )
                 ref_audio_path = custom_audio_upload
-                whisper_model = get_whisper_model(
-                    model_name="whisper-base",
-                    device=torch.device(device),
-                    dtype=torch.float32,
-                )
+                whisper_model = get_whisper_model(model_name="whisper-base")
                 result = whisper_model.transcribe(ref_audio_path)
                 ref_transcript = result.get("text", "")
             elif ref_audio_dropdown == "None" or not ref_audio_dropdown:
@@ -154,11 +146,7 @@ def higgs_v2_tts():
                         "Please upload a custom audio file for Speaker 0 (WAV format).",
                     )
                 ref_audio_path_0 = speaker0_custom_audio_upload
-                whisper_model = get_whisper_model(
-                    model_name="whisper-base",
-                    device=torch.device(device),
-                    dtype=torch.float32,
-                )
+                whisper_model = get_whisper_model(model_name="whisper-base")
                 result = whisper_model.transcribe(ref_audio_path_0)
                 ref_transcript_0 = result.get("text", "")
             else:
@@ -182,11 +170,7 @@ def higgs_v2_tts():
                         "Please upload a custom audio file for Speaker 1 (WAV format).",
                     )
                 ref_audio_path_1 = speaker1_custom_audio_upload
-                whisper_model = get_whisper_model(
-                    model_name="whisper-base",
-                    device=torch.device(device),
-                    dtype=torch.float32,
-                )
+                whisper_model = get_whisper_model(model_name="whisper-base")
                 result = whisper_model.transcribe(ref_audio_path_1)
                 ref_transcript_1 = result.get("text", "")
             else:
