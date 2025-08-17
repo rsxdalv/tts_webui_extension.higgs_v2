@@ -1,4 +1,6 @@
 import functools
+import os
+import tempfile
 import gradio as gr
 from gradio_iconbutton import IconButton
 
@@ -12,21 +14,13 @@ from tts_webui.extensions_loader.decorator_extensions import (
     decorator_extension_inner_generator,
     decorator_extension_outer_generator,
 )
-from tts_webui.utils.list_dir_models import unload_model_button
-from tts_webui.utils.randomize_seed import randomize_seed_ui
-from tts_webui.utils.OpenFolderButton import OpenFolderButton
-from tts_webui.utils.get_path_from_root import get_path_from_root
 
 from .api import (
-    move_model_to_device_and_dtype,
     tts,
     tts_stream,
-    interrupt,
-    get_voices,
     vc,
-    compile_t3,
-    remove_t3_compilation,
-    get_current_model,
+    get_engine,
+    get_whisper_model,
 )
 from .memory import get_higgs_v2_memory_usage
 
@@ -96,309 +90,301 @@ def ui():
 
 
 def higgs_v2_tts():
+    """HiggsAudio Generation UI with Smart/Clone/Multi-voice features."""
+    # Voice prompts directory (optional); if not found, preloaded_voices stays empty
+    voice_prompts_dir = os.path.join(os.getcwd(), "examples", "voice_prompts")
+    preloaded_voices = (
+        [os.path.splitext(f)[0] for f in os.listdir(voice_prompts_dir) if f.lower().endswith(".wav")]
+        if os.path.exists(voice_prompts_dir)
+        else []
+    )
+
+    def generate_audio(
+        scene_description,
+        transcript,
+        voice_type,
+        ref_audio_dropdown,
+        custom_audio_upload,
+        temperature,
+        seed,
+        speaker0,
+        speaker0_custom_audio_upload,
+        speaker1,
+        speaker1_custom_audio_upload,
+    ):
+        import soundfile as sf
+        import torch
+        from boson_multimodal.data_types import AudioContent, ChatMLSample, Message
+
+        # Validation for multi-speaker
+        is_multi_speaker = "[SPEAKER" in (transcript or "")
+        if is_multi_speaker and voice_type == "Voice Clone":
+            return gr.update(value=None), "For multi-speaker transcripts, please use 'Smart Voice' or 'Multi-voice Clone'."
+        if not is_multi_speaker and voice_type == "Multi-voice Clone":
+            return gr.update(value=None), "For 'Multi-voice Clone', your transcript must include speaker tags like [SPEAKER0] and [SPEAKER1]."
+
+        # System prompt and messages
+        system_prompt = (
+            f"Generate audio following instruction.\n\n<|scene_desc_start|>\n{scene_description}\n<|scene_desc_end|>"
+        )
+        messages = [Message(role="system", content=system_prompt)]
+        ras_win_len = 7
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        engine = get_engine(
+            model_name=f"HiggsAudioEngine on {device} with float32",
+            device=torch.device(device),
+            dtype=torch.float32,
+        )
+
+        # Voice handling
+        if voice_type == "Smart Voice":
+            messages.append(Message(role="user", content=transcript))
+
+        elif voice_type == "Voice Clone":
+            # Single reference
+            if ref_audio_dropdown == "Custom Upload":
+                if custom_audio_upload is None:
+                    return gr.update(value=None), "Please upload a custom audio file (WAV format)."
+                ref_audio_path = custom_audio_upload
+                whisper_model = get_whisper_model(
+                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                )
+                result = whisper_model.transcribe(ref_audio_path)
+                ref_transcript = result.get("text", "")
+            elif ref_audio_dropdown == "None" or not ref_audio_dropdown:
+                ref_audio_path = None
+                ref_transcript = None
+            else:
+                ref_audio_path = os.path.join(voice_prompts_dir, f"{ref_audio_dropdown}.wav")
+                ref_transcript_path = os.path.join(voice_prompts_dir, f"{ref_audio_dropdown}.txt")
+                if not os.path.exists(ref_transcript_path):
+                    return gr.update(value=None), f"Reference transcript not found at {ref_transcript_path}"
+                with open(ref_transcript_path, encoding="utf-8") as f:
+                    ref_transcript = f.read().strip()
+
+            if ref_audio_path and ref_transcript is not None:
+                messages.append(Message(role="user", content=ref_transcript))
+                messages.append(
+                    Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path)])
+                )
+            messages.append(Message(role="user", content=transcript))
+
+        elif voice_type == "Multi-voice Clone":
+            if speaker0 == "None" or speaker1 == "None":
+                return gr.update(value=None), "Please select two speakers for multi-voice cloning."
+
+            # Speaker 0
+            if speaker0 == "Custom Upload":
+                if speaker0_custom_audio_upload is None:
+                    return gr.update(value=None), "Please upload a custom audio file for Speaker 0 (WAV format)."
+                ref_audio_path_0 = speaker0_custom_audio_upload
+                whisper_model = get_whisper_model(
+                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                )
+                result = whisper_model.transcribe(ref_audio_path_0)
+                ref_transcript_0 = result.get("text", "")
+            else:
+                ref_audio_path_0 = os.path.join(voice_prompts_dir, f"{speaker0}.wav")
+                ref_transcript_path_0 = os.path.join(voice_prompts_dir, f"{speaker0}.txt")
+                if not os.path.exists(ref_transcript_path_0):
+                    return gr.update(value=None), f"Reference transcript not found for {speaker0}"
+                with open(ref_transcript_path_0, encoding="utf-8") as f:
+                    ref_transcript_0 = f.read().strip()
+
+            # Speaker 1
+            if speaker1 == "Custom Upload":
+                if speaker1_custom_audio_upload is None:
+                    return gr.update(value=None), "Please upload a custom audio file for Speaker 1 (WAV format)."
+                ref_audio_path_1 = speaker1_custom_audio_upload
+                whisper_model = get_whisper_model(
+                    model_name="whisper-base", device=torch.device(device), dtype=torch.float32
+                )
+                result = whisper_model.transcribe(ref_audio_path_1)
+                ref_transcript_1 = result.get("text", "")
+            else:
+                ref_audio_path_1 = os.path.join(voice_prompts_dir, f"{speaker1}.wav")
+                ref_transcript_path_1 = os.path.join(voice_prompts_dir, f"{speaker1}.txt")
+                if not os.path.exists(ref_transcript_path_1):
+                    return gr.update(value=None), f"Reference transcript not found for {speaker1}"
+                with open(ref_transcript_path_1, encoding="utf-8") as f:
+                    ref_transcript_1 = f.read().strip()
+
+            messages.extend([
+                Message(role="user", content=f"[SPEAKER0] {ref_transcript_0}"),
+                Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path_0)]),
+                Message(role="user", content=f"[SPEAKER1] {ref_transcript_1}"),
+                Message(role="assistant", content=[AudioContent(audio_url=ref_audio_path_1)]),
+                Message(role="user", content=transcript),
+            ])
+
+        # Seed
+        if seed is not None and str(seed).strip() != "":
+            try:
+                import torch as _t
+                _t.manual_seed(int(seed))
+            except Exception:
+                pass
+
+        # Generate
+        from boson_multimodal.serve.serve_engine import HiggsAudioResponse  # type: ignore
+
+        output: HiggsAudioResponse = engine.generate(
+            chat_ml_sample=ChatMLSample(messages=messages),
+            max_new_tokens=2048,
+            temperature=float(temperature),
+            top_p=0.95,
+            top_k=50,
+            stop_strings=["<|end_of_text|>", "<|eot_id|>"],
+            ras_win_len=ras_win_len,
+            seed=int(seed) if (seed is not None and str(seed).strip() != "") else None,
+        )
+
+        audio_data = (
+            output.audio.detach().cpu().numpy() if hasattr(output, "audio") and getattr(output, "audio") is not None and hasattr(output.audio, "detach") else output.audio
+        )
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        sf.write(tmp_file.name, audio_data, output.sampling_rate)
+
+        try:
+            import torch as _t
+            if _t.cuda.is_available():
+                _t.cuda.empty_cache()
+        except Exception:
+            pass
+        return tmp_file.name, None
+
+    # UI layout
     with gr.Column():
-        text = gr.Textbox(label="Text", lines=3)
-        with gr.Row():
-            btn_interrupt = gr.Button("Interrupt next chunk", interactive=False)
-            btn_stream = gr.Button("Streaming generation", variant="secondary")
-            btn = gr.Button("Generate", variant="primary")
-        btn_interrupt.click(
-            fn=lambda: gr.Button("Interrupting..."),
-            outputs=[btn_interrupt],
-        ).then(fn=interrupt, outputs=[btn_interrupt])
+        scene_description = gr.Textbox(
+            label="Scene Description",
+            value="Audio is recorded from a quiet room.",
+            info="Describe the acoustic environment.",
+        )
+        transcript = gr.Textbox(
+            label="Transcript",
+            lines=5,
+            placeholder="Enter text here. For multi-speaker, use [SPEAKER0], [SPEAKER1], etc.",
+        )
+        voice_type = gr.Radio(
+            ["Smart Voice", "Voice Clone", "Multi-voice Clone"],
+            label="Voice Type",
+            value="Smart Voice",
+            info=(
+                "Smart Voice: Model selects voice. Voice Clone: Use a single reference audio. "
+                "Multi-voice Clone: Use two reference audios for multi-speaker transcripts."
+            ),
+        )
 
-        with gr.Row():
-            voice_dropdown = gr.Dropdown(
-                label="Saved voices", choices=["refresh to load the voices"]
+        with gr.Group(visible=False) as voice_clone_group:
+            ref_audio_dropdown = gr.Dropdown(
+                choices=["None"] + preloaded_voices + ["Custom Upload"],
+                label="Reference Audio",
+                value="None",
+                info="Select a pre-loaded voice or upload your own (used with Voice Clone).",
             )
-            IconButton("refresh").click(
-                fn=lambda: gr.Dropdown(choices=get_voices()),
-                outputs=[voice_dropdown],
-            )
-            OpenFolderButton(
-                get_path_from_root("voices", "higgs_v2"),
-                api_name="higgs_v2_open_voices_dir",
+            custom_audio_upload = gr.File(
+                label=(
+                    "Custom Reference Audio (Upload a WAV file if 'Custom Upload' is selected)"
+                ),
+                file_types=[".wav"],
             )
 
-        audio_prompt_path = gr.Audio(
-            label="Reference Audio", type="filepath", value=None
-        )
+        with gr.Group(visible=False) as multi_voice_clone_group:
+            speaker0_dropdown = gr.Dropdown(
+                choices=["None"] + preloaded_voices + ["Custom Upload"],
+                label="Speaker 0",
+                value="None",
+                info="Select a pre-loaded voice or upload your own for [SPEAKER0].",
+            )
+            speaker0_custom_audio_upload = gr.File(
+                label=(
+                    "Custom Reference Audio for Speaker 0 (Upload a WAV file if 'Custom Upload' is selected)"
+                ),
+                file_types=[".wav"],
+                visible=False,
+            )
+            speaker1_dropdown = gr.Dropdown(
+                choices=["None"] + preloaded_voices + ["Custom Upload"],
+                label="Speaker 1",
+                value="None",
+                info="Select a pre-loaded voice or upload your own for [SPEAKER1].",
+            )
+            speaker1_custom_audio_upload = gr.File(
+                label=(
+                    "Custom Reference Audio for Speaker 1 (Upload a WAV file if 'Custom Upload' is selected)"
+                ),
+                file_types=[".wav"],
+                visible=False,
+            )
 
-        voice_dropdown.change(
-            lambda x: gr.Audio(value=x),
-            inputs=[voice_dropdown],
-            outputs=[audio_prompt_path],
+        temperature = gr.Slider(
+            minimum=0.1,
+            maximum=1.0,
+            step=0.1,
+            value=0.3,
+            label="Temperature",
+            info="Controls randomness (0.1 = less random, 1.0 = more random).",
         )
-
-        exaggeration = gr.Slider(
-            label="Exaggeration (Neutral = 0.5, extreme values can be unstable)",
-            minimum=0,
-            maximum=2,
-            value=0.5,
+        seed = gr.Number(
+            label="Seed",
+            value=12345,
+            info="Set for reproducible results. Leave blank for random.",
         )
-        cfg_weight = gr.Slider(
-            label="CFG Weight/Pace", minimum=0.0, maximum=1, value=0.5
-        )
-        temperature = gr.Slider(label="Temperature", minimum=0.05, maximum=5, value=0.8)
-
-        seed, randomize_seed_callback = randomize_seed_ui()
+        generate_btn = gr.Button("Generate", variant="primary")
 
     with gr.Column():
-        audio_out = gr.Audio(label="Audio Output")
-        streaming_audio_output = gr.Audio(
-            label="Audio Output (streaming)", streaming=True, autoplay=True
+        output_audio = gr.Audio(
+            label="Generated Audio", interactive=False, type="filepath"
         )
+        error_md = gr.Markdown(visible=False)
 
-        gr.Markdown("## Settings")
+    # Logic for toggling UI elements
+    voice_type.change(
+        fn=lambda value: (
+            gr.update(visible=value == "Voice Clone"),
+            gr.update(visible=value == "Multi-voice Clone"),
+        ),
+        inputs=voice_type,
+        outputs=[voice_clone_group, multi_voice_clone_group],
+    )
 
-        with gr.Accordion("Chunking", open=True), gr.Group():
-            chunked = gr.Checkbox(label="Split prompt into chunks", value=False)
-            with gr.Row():
-                desired_length = gr.Slider(
-                    label="Desired length (characters)",
-                    minimum=10,
-                    maximum=1000,
-                    value=200,
-                    step=1,
-                )
-                max_length = gr.Slider(
-                    label="Max length (characters)",
-                    minimum=10,
-                    maximum=1000,
-                    value=300,
-                    step=1,
-                )
-                halve_first_chunk = gr.Checkbox(
-                    label="Halve first chunk size",
-                    value=False,
-                )
-                cache_voice = gr.Checkbox(
-                    label="Cache voice (not implemented)",
-                    value=False,
-                    visible=False,
-                )
-        # model
-        with gr.Accordion("Model", open=False):
-            with gr.Row():
-                device = gr.Radio(
-                    label="Device",
-                    choices=["auto", "cuda", "mps", "cpu"],
-                    value="auto",
-                )
-                dtype = gr.Radio(
-                    label="Dtype",
-                    choices=["float32", "float16", "bfloat16"],
-                    value="float32",
-                )
-                cpu_offload = gr.Checkbox(label="CPU Offload", value=False)
-                model_name = gr.Dropdown(
-                    label="Model",
-                    choices=["just_a_placeholder"],
-                    value="just_a_placeholder",
-                    visible=False,
-                )
-            
-            with gr.Row():
-                btn_move_model = gr.Button("Move to device and dtype")
-                btn_move_model.click(
-                    fn=lambda: gr.Button("Moving..."),
-                    outputs=[btn_move_model],
-                ).then(
-                    fn=move_model_to_device_and_dtype,
-                    inputs=[device, dtype, cpu_offload],
-                ).then(
-                    fn=lambda: gr.Button("Move to device and dtype"),
-                    outputs=[btn_move_model],
-                )
-                unload_model_button("higgs_v2")
+    def _toggle_custom(v):
+        return gr.update(visible=v == "Custom Upload")
 
-            gr.Markdown("## Optimization")
-            gr.Markdown("""
-                        By reducing cache length, the model becomes faster, but maximum generation length is reduced. Gives an error if too low.
-                        For fastest speeds, reduce prompt length and max new tokens. Fast: 330 max new tokens, 600 cache length.
-                        """)
-            with gr.Row():
-                max_new_tokens = gr.Slider(
-                    label="Max new tokens",
-                    minimum=100,
-                    maximum=1000,
-                    value=1000,
-                    step=10,
-                )
-                max_cache_len = gr.Slider(
-                    label="Cache length",
-                    minimum=200,
-                    maximum=1500,
-                    value=1500,
-                    step=10,
-                )
-            use_compilation = gr.Checkbox(label="Use compilation", value=None, visible=True)
+    ref_audio_dropdown.change(
+        fn=_toggle_custom,
+        inputs=ref_audio_dropdown,
+        outputs=custom_audio_upload,
+    )
+    speaker0_dropdown.change(
+        fn=_toggle_custom,
+        inputs=speaker0_dropdown,
+        outputs=speaker0_custom_audio_upload,
+    )
+    speaker1_dropdown.change(
+        fn=_toggle_custom,
+        inputs=speaker1_dropdown,
+        outputs=speaker1_custom_audio_upload,
+    )
 
-            with gr.Row(visible=False):
-                btn_compile = gr.Button("Compile model", variant="primary")
-                btn_compile.click(
-                    fn=lambda: gr.Button("Compiling..."),
-                    outputs=[btn_compile],
-                ).then(
-                    fn=lambda: compile_t3(get_current_model("higgs_v2")),
-                    inputs=[],
-                    outputs=[],
-                ).then(
-                    fn=lambda: gr.Button("Compile model"),
-                    outputs=[btn_compile],
-                )
-                btn_remove_compilation = gr.Button("Remove compilation")
-                btn_remove_compilation.click(
-                    fn=lambda: gr.Button("Removing compilation..."),
-                    outputs=[btn_remove_compilation],
-                ).then(
-                    fn=lambda: remove_t3_compilation(get_current_model("higgs_v2")),
-                    inputs=[],
-                    outputs=[],
-                ).then(
-                    fn=lambda: gr.Button("Remove compilation"),
-                    outputs=[btn_remove_compilation],
-                )
-                def reset_torch_dynamo():
-                    import torch
-                    torch._dynamo.reset()
-                gr.Button("Reset compilation", variant="stop").click(
-                    fn=reset_torch_dynamo,
-                    inputs=[],
-                    outputs=[],
-                )
-
-            gr.Markdown("Memory usage:")
-            gr.Button("Check memory usage").click(
-                fn=get_higgs_v2_memory_usage,
-                outputs=[gr.Markdown()],
-            )
-
-        gr.Markdown(
-            "Sliced audio streaming is deprecated due to artifacts, use chunking instead."
-        )
-        with gr.Accordion("Streaming (Advanced Settings)", open=False, visible=False):
-            gr.Markdown(
-                """
-Streaming has issues due to Higgs_v2 producing artifacts.
-Tokens per slice: 
-* 1000 is recommended, it is the default maximum value, equivalent to disabling streaming.
-* One second is around 23.5 tokens.
-                        
-Remove milliseconds:
-* 25 - 65 is recommended.
-* This removes the last 45 milliseconds of each slice to avoid artifacts.
-* start: 15 - 35 is recommended.
-* This removes the first 25 milliseconds of each slice to avoid artifacts.
-                        
-Chunk overlap method:
-* zero means that each chunk is seen sparately by the audio generator. 
-* full means that each chunk is appended and decoded as one long audio file.
-                        
-Thus **the challenge is to fix the seams** - with no overlap, the artifacts are high. With a very long overlap, such as a 0.5s crossfade, the audio starts to produce echo.
-"""
-            )
-            with gr.Row():
-                tokens_per_slice = gr.Slider(
-                    label="Tokens per slice",
-                    minimum=1,
-                    maximum=1000,
-                    value=1000,
-                    step=1,
-                )
-                remove_milliseconds = gr.Slider(
-                    label="Remove milliseconds",
-                    minimum=0,
-                    maximum=300,
-                    value=45,
-                    step=1,
-                )
-                remove_milliseconds_start = gr.Slider(
-                    label="Remove milliseconds start",
-                    minimum=0,
-                    maximum=300,
-                    value=25,
-                    step=1,
-                )
-                chunk_overlap_method = gr.Radio(
-                    label="Chunk overlap method",
-                    choices=["zero", "full"],
-                    value="zero",
-                )
-
-    inputs = {
-        text: "text",
-        exaggeration: "exaggeration",
-        cfg_weight: "cfg_weight",
-        temperature: "temperature",
-        audio_prompt_path: "audio_prompt_path",
-        seed: "seed",
-        # model
-        device: "device",
-        dtype: "dtype",
-        model_name: "model_name",
-        # hyperparameters
-        chunked: "chunked",
-        cpu_offload: "cpu_offload",
-        cache_voice: "cache_voice",
-        # streaming
-        tokens_per_slice: "tokens_per_slice",
-        remove_milliseconds: "remove_milliseconds",
-        remove_milliseconds_start: "remove_milliseconds_start",
-        chunk_overlap_method: "chunk_overlap_method",
-        # chunks
-        desired_length: "desired_length",
-        max_length: "max_length",
-        halve_first_chunk: "halve_first_chunk",
-        # compile
-        use_compilation: "use_compilation",
-        # optimization
-        max_new_tokens: "max_new_tokens",
-        max_cache_len: "max_cache_len",
-    }
-
-    generation_start = {
-        "fn": lambda: [
-            gr.Button("Generating...", interactive=False),
-            gr.Button("Generating...", interactive=False),
-            gr.Button("Interrupt next chunk", interactive=True, variant="stop"),
+    generate_btn.click(
+        fn=generate_audio,
+        inputs=[
+            scene_description,
+            transcript,
+            voice_type,
+            ref_audio_dropdown,
+            custom_audio_upload,
+            temperature,
+            seed,
+            speaker0_dropdown,
+            speaker0_custom_audio_upload,
+            speaker1_dropdown,
+            speaker1_custom_audio_upload,
         ],
-        "outputs": [btn, btn_stream, btn_interrupt],
-    }
-    generation_end = {
-        "fn": lambda: [
-            gr.Button("Generate", interactive=True, variant="primary"),
-            gr.Button("Streaming generation", interactive=True, variant="secondary"),
-            gr.Button("Interrupt next chunk", interactive=False, variant="stop"),
-        ],
-        "outputs": [btn, btn_stream, btn_interrupt],
-    }
-
-    btn.click(**randomize_seed_callback).then(**generation_start).then(
-        **dictionarize_wraps(
-            tts_decorated,
-            inputs=inputs,
-            outputs={
-                "audio_out": audio_out,
-                "metadata": gr.JSON(visible=False),
-                "folder_root": gr.Textbox(visible=False),
-            },
-            api_name="higgs_v2_tts",
-        )
-    ).then(**generation_end)
-
-    btn_stream.click(**randomize_seed_callback).then(**generation_start).then(
-        **dictionarize_wraps(
-            tts_generator_decorated,
-            inputs=inputs,
-            outputs={
-                "audio_out": streaming_audio_output,
-                # "metadata": gr.JSON(visible=False),
-                # "folder_root": gr.Textbox(visible=False),
-            },
-            api_name="higgs_v2_tts_streaming",
-        )
-    ).then(**generation_end)
+        outputs=[output_audio, error_md],
+    )
 
 
 @functools.wraps(vc)
