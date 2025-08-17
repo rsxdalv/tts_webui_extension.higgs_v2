@@ -28,7 +28,7 @@ def generate_model_name(device, dtype):
 
 
 @manage_model_state("higgs_v2")
-def get_engine(device: torch.device = torch.device("cuda")):
+def get_engine(model_name: str, device: torch.device = torch.device("cuda")):
     from boson_multimodal.serve.serve_engine import HiggsAudioServeEngine
 
     dev_str = device.type if isinstance(device, torch.device) else str(device)

@@ -32,7 +32,8 @@ def tts_decorated(*args, _type=None, **kwargs):
 
 
 def ui():
-    higgs_v2_tts()
+    with gr.Row():
+        higgs_v2_tts()
 
 
 def higgs_v2_tts():
