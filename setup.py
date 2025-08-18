@@ -14,9 +14,7 @@ setuptools.setup(
     scripts=[],
     install_requires=[
         "gradio",
-        # "higgs_v2-tts"
-        "higgs_v2-tts @ git+https://github.com/rsxdalv/higgs-audio@main",
-        # "peft",
+        "higgs-audio @ git+https://github.com/rsxdalv/higgs-audio@main",
     ],
     classifiers=[
         "Programming Language :: Python :: 3",
